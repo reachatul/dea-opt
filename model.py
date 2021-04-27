@@ -4,6 +4,8 @@ import pulp as plp
 import numpy as np
 import itertools
 import pickle
+import time
+
 
 def build_model(stock_model, input, output, stocks):
 
@@ -80,6 +82,51 @@ def build_range_directional_model(stock_model, input, output, stocks):
         'failed'
 
 
+def build_inverse_range_directional_model(stock_model, input, output, stocks):
+
+    input = input.set_index("stock")
+    output = output.set_index("stock")
+
+    # create Range
+    ro = output.max(axis=0) - output.loc[stock_model, :]
+    ri = input.loc[stock_model, :] - input.min(axis=0)
+
+    # Create a non negative Beta variable:
+    beta = plp.LpVariable('beta', lowBound=0)
+
+    # Create a lambda variable for each stock
+    lmda = {stock: plp.LpVariable(f'l_{stock}', lowBound=0) for stock in
+                                  stocks["stock_id"]}
+
+    # maximize beta
+    model = plp.LpProblem(stock_model, plp.LpMaximize); model+= beta
+
+    model+= plp.lpSum(lmda[s] for s in stocks["stock_id"]) == 1
+
+    for r in output.columns:
+        if (1/ro[r]) == np.inf:
+            coeff = 0
+        else:
+            coeff =  (1/ro[r])
+        model += (plp.lpSum(plp.lpSum(lmda[j]*output.at[j, r] for j in
+        stocks['stock_id'])) >= output.at[stock_model, r] + beta*coeff)
+
+    for i in input.columns:
+        if (1/ri[i]) == np.inf:
+            coeff = 0
+        else:
+            coeff =  (1/ri[i])
+        model += (plp.lpSum(plp.lpSum(lmda[j]*input.at[j, i] for j in
+        stocks['stock_id'])) <= input.at[stock_model, i] - beta*coeff)
+
+    status = model.solve(plp.PULP_CBC_CMD(msg=0))
+
+    if plp.LpStatus[status] == 'Optimal':
+        return 1 - plp.value(beta)
+    else:
+        'failed'
+
+
 def dea(file="input"):
     xl = pd.ExcelFile(f"{file}.xlsx")
     xl.sheet_names
@@ -115,7 +162,7 @@ def run_for_comb(numb=0):
     output = output_all[["stock"] + output_cols]
 
     for stock_model in stocks["stock_id"]:
-        output_efficiency[stock_model] = build_range_directional_model(stock_model, input, output, stocks)
+        output_efficiency[stock_model] = build_inverse_range_directional_model(stock_model, input, output, stocks)
     efficiency = pd.DataFrame.from_dict(output_efficiency, orient='index',
                                         columns=["efficiency"])
     re = ror.merge(efficiency.reset_index().rename(columns={'index': 'stock'}), on = 'stock')
@@ -141,7 +188,7 @@ def _get_effs(numb=0):
     output = output_all[["stock"] + output_cols]
 
     for stock_model in stocks["stock_id"]:
-        output_efficiency[stock_model] = build_range_directional_model(stock_model, input, output, stocks)
+        output_efficiency[stock_model] = build_inverse_range_directional_model(stock_model, input, output, stocks)
     efficiency = pd.DataFrame.from_dict(output_efficiency, orient='index',
                                         columns=["efficiency"])
     return efficiency
@@ -152,5 +199,19 @@ if __name__ == '__main__':
     pool = multiprocessing.Pool()
     result = pool.map(run_for_comb, range(130000))
 
-    f = open('sol.pkl', 'wb')
+    timestr = time.strftime("%Y%m%d-%H%M%S")
+    f = open('sol_{timestr}.pkl', 'wb')
     pickle.dump(result, f)
+
+    # import pickle
+    # corr = pickle.load(open('sol.pkl', 'rb'))
+    #
+    # corrd = {list(i.keys())[0] : list(i.values())[0] for i in corr}
+    #
+    #
+    # corrd[32739]
+    # max(corrd, key=corrd.get)
+    #
+    # ror
+    #numb = 32739
+    # _get_effs(32739)
