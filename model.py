@@ -1,6 +1,9 @@
 # import click
 import pandas as pd
 import pulp as plp
+import numpy as np
+import itertools
+import pickle
 
 def build_model(stock_model, input, output, stocks):
 
@@ -94,7 +97,12 @@ def dea(file="input"):
 
 
 def run_for_comb(numb=0):
-    # numb = 7374
+    output_all = pickle.load(open("output_all.pkl", 'rb'))
+    input_all = pickle.load(open("input_all.pkl", 'rb'))
+    total_combs = pickle.load(open("total_combs.pkl", 'rb'))
+    ror = pickle.load(open("ror.pkl", 'rb'))
+    stocks = pickle.load(open("stocks.pkl", 'rb'))
+
     output_efficiency = {}
     input_cols_idx = np.where( total_combs[numb][0] == 1)
     input_cols = [f"input_{i+1}" for i in input_cols_idx[0]]
@@ -110,44 +118,39 @@ def run_for_comb(numb=0):
         output_efficiency[stock_model] = build_range_directional_model(stock_model, input, output, stocks)
     efficiency = pd.DataFrame.from_dict(output_efficiency, orient='index',
                                         columns=["efficiency"])
-    return efficiency.reset_index().rename(columns={'index': 'stock'})
+    re = ror.merge(efficiency.reset_index().rename(columns={'index': 'stock'}), on = 'stock')
+    return {numb: re['efficiency'].corr(re['rate_of_return'])}
+
+
+def _get_effs(numb=0):
+    output_all = pickle.load(open("output_all.pkl", 'rb'))
+    input_all = pickle.load(open("input_all.pkl", 'rb'))
+    total_combs = pickle.load(open("total_combs.pkl", 'rb'))
+    ror = pickle.load(open("ror.pkl", 'rb'))
+    stocks = pickle.load(open("stocks.pkl", 'rb'))
+
+    output_efficiency = {}
+    input_cols_idx = np.where( total_combs[numb][0] == 1)
+    input_cols = [f"input_{i+1}" for i in input_cols_idx[0]]
+
+    output_cols_idx = np.where( total_combs[numb][1] == 1)
+    output_cols = [f"output_{i+1}" for i in output_cols_idx[0]]
+
+
+    input = input_all[["stock"] + input_cols]
+    output = output_all[["stock"] + output_cols]
+
+    for stock_model in stocks["stock_id"]:
+        output_efficiency[stock_model] = build_range_directional_model(stock_model, input, output, stocks)
+    efficiency = pd.DataFrame.from_dict(output_efficiency, orient='index',
+                                        columns=["efficiency"])
+    return efficiency
 
 if __name__ == '__main__':
-    # read input and get all the combinations of input and output
-    xl = pd.ExcelFile("input_data_IT_v2.xlsx")
-    xl.sheet_names
 
-    stocks = xl.parse('stock')
-    input_all = xl.parse('input')
-    output_all = xl.parse('output')
-    ror = xl.parse('rate_of_return')
+    import multiprocessing
+    pool = multiprocessing.Pool()
+    result = pool.map(run_for_comb, range(130000))
 
-    import numpy as np
-    import itertools
-
-    input_num = input_all.shape[1] - 1
-    output_num = output_all.shape[1] - 1
-
-    input_combinations = np.array([list(j) for i, j in enumerate(
-                itertools.product(*[[0, 1] for i in range(input_num)]))])
-    input_combinations = [i for i in input_combinations if sum(i) >= 1]
-
-    output_combinations = np.array([list(j) for i, j in enumerate(
-                itertools.product(*[[0, 1] for i in range(output_num)]))])
-    output_combinations = [i for i in output_combinations if sum(i) >= 1]
-
-    total_combs = [(i, j) for i in input_combinations for j in output_combinations]
-
-    len(total_combs)
-    total_combs[0][0]
-    total_combs[0][1]
-
-    corr_comb = {}
-    failed_ = []
-    for i in range(len(total_combs)):
-        # try: i = 7374
-            efficiency = run_for_comb(i)
-            re = ror.merge(efficiency, on = 'stock')
-            corr_comb[i] = re['efficiency'].corr(re['rate_of_return'])
-            if i%1000 == 0:
-                print(f'completed {i}')
+    f = open('sol.pkl', 'wb')
+    pickle.dump(result, f)
